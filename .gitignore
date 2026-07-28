@@ -6,3 +6,11 @@ node_modules
 # CDK asset staging directory
 .cdk.staging
 cdk.out
+
+node_modules/
+.next/
+out/
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
