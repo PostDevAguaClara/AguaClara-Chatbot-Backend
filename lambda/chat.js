@@ -1,9 +1,15 @@
 const {
     BedrockAgentRuntimeClient,
-    RetrieveAndGenerateCommand,
+    RetrieveCommand,
 } = require("@aws-sdk/client-bedrock-agent-runtime");
 
-const client = new BedrockAgentRuntimeClient({});
+const {
+    BedrockRuntimeClient,
+    ConverseCommand,
+} = require("@aws-sdk/client-bedrock-runtime");
+
+const retrieveClient = new BedrockAgentRuntimeClient({});
+const runtimeClient = new BedrockRuntimeClient({});
 
 exports.handler = async (event) => {
 
@@ -34,43 +40,65 @@ exports.handler = async (event) => {
         $query$
         </question>
     `
-    const result = await client.send(
-        new RetrieveAndGenerateCommand({
-            input: { text: body.prompt },
-            retrieveAndGenerateConfiguration: {
-                type: "KNOWLEDGE_BASE",
-                knowledgeBaseConfiguration: {
-                    knowledgeBaseId: process.env.KNOWLEDGEBASE_ID,
-                    // modelArn: "arn:aws:bedrock:us-east-2::foundation-model/amazon.nova-pro-v1:0",
-                    modelArn: "arn:aws:bedrock:us-east-2::foundation-model/amazon.nova-lite-v1:0",
-                    // generationConfiguration: {
-                    //     promptTemplate: {
-                    //         textPromptTemplate: promptTemplate
-                    //     }
-                    // }
-                }
-            }
+    const retrieved = await retrieveClient.send(
+        new RetrieveCommand({
+            knowledgeBaseId: process.env.KNOWLEDGEBASE_ID,
+            retrievalQuery: {
+                text: body.prompt,
+            },
+            retrievalConfiguration: {
+                vectorSearchConfiguration: {
+                    numberOfResults: 5,
+                },
+            },
+        })
+    );
+
+    const context = retrieved.retrievalResults
+        .map((reference, i) => {
+            return `Source ${i + 1} ${reference.content?.text ?? ""}`;
+        })
+        .join("\n\n------------------------\n\n");
+    
+    const converseResult = await runtimeClient.send(
+        new ConverseCommand({
+            modelId: "amazon.nova-lite-v1:0",
+            system: [
+                { text: promptTemplate },
+            ],
+            messages: [
+                {
+                    role: "user",
+                    content: [
+                        {
+                            text: `Documentation: ${context}
+                            Question: ${body.prompt}`,
+                        },
+                    ],
+                },
+            ],
         })
     );
 
     // Build responce
-    const response = {
-        sessionId: result.sessionId,
-        output: result.output?.text ?? "",
-        citations: [],
-        info: "",
-    };
-    response.info = `Raw result: ${JSON.stringify(result, null, 2)}`;
+    const output = converseResult.output?.message?.content
+        ?.map((c) => c.text ?? "")
+        .join("") ?? "";
 
-    for (const citation of result.citations ?? []) {
-        for (const reference of citation.retrievedReferences ?? []) {
-            response.citations.push({
-                quote: reference.content?.text ?? "",
-                name: reference.metadata?.["file-name"],
-                url:  reference.metadata?.["web-view-link"],
-                path: reference.metadata?.["path"],
-            });
-        }
+    const response = {
+        sessionId: crypto.randomUUID(),
+        output: output,
+        citations: []
+    };
+
+    
+    for (const reference of retrieved.retrievalResults) {
+        response.citations.push({
+            quote: reference.content?.text ?? "",
+            name: reference.metadata?.["file-name"],
+            url: reference.metadata?.["web-view-link"],
+            path: reference.metadata?.["path"],
+        });
     }
 
     return {
