@@ -23,23 +23,7 @@ exports.handler = async (event) => {
             })
         };
     }
-    const promptTemplate = `
-        <instructions>
-        You are an AguaClara documentation assistant.
-        Answer the user's questions using only the retrived doucments.
-        Do NOT reveal search steps, tool calls, reasoning, or internal actions.
-        Do NOT output "Actions:", "Observation:", "Response:", "Passage:", or similar labels.
-        Responce only with the final answer in natural language.
-        </instructions>
 
-        <database>
-        $search_results$
-        </database>
-
-        <question>
-        $query$
-        </question>
-    `
     const retrieved = await retrieveClient.send(
         new RetrieveCommand({
             knowledgeBaseId: process.env.KNOWLEDGEBASE_ID,
@@ -56,10 +40,27 @@ exports.handler = async (event) => {
 
     const context = retrieved.retrievalResults
         .map((reference, i) => {
-            return `Source ${i + 1} ${reference.content?.text ?? ""}`;
+            return `<source id=${i + 1}> ${reference.content?.text ?? ""} <\source>`;
         })
-        .join("\n\n------------------------\n\n");
+        .join("\n\n");
     
+    const promptTemplate = `
+        You are an AguaClara documentation assistant.
+        Answer the user's question using the provided documentation sources when they contain relevant information.
+        If the sources do not contain enough information, say that the documentation does not provide enough information and explain what is missing.
+        Do NOT answer from general knowledge.
+        Do NOT reveal search steps, tool calls, reasoning, or internal actions.
+
+        Your response MUST be valid JSON with exactly this format:
+
+        {
+            "answer": "The natural language answer to the user.",
+            "usedSources": [1, 3]
+        }
+
+        The "usedSources" array must contain ONLY the source IDs that directly support your answer.
+        If no provided sources support the answer, "usedSources" must be an empty array.
+    `
     const converseResult = await runtimeClient.send(
         new ConverseCommand({
             modelId: "amazon.nova-lite-v1:0",
@@ -85,21 +86,41 @@ exports.handler = async (event) => {
         ?.map((c) => c.text ?? "")
         .join("") ?? "";
 
+    let modelResponse;
+    try {
+        modelResponse = JSON.parse(output);
+    } catch (e) {
+        console.error("Failed to parse model JSON:", output);
+        modelResponse = {
+            answer: output,
+            usedSources: []
+        };
+    }
+
     const response = {
         sessionId: crypto.randomUUID(),
-        output: output,
+        output: modelResponse.answer,
         citations: []
     };
-
-    
-    for (const reference of retrieved.retrievalResults) {
-        response.citations.push({
-            quote: reference.content?.text ?? "",
-            name: reference.metadata?.["file-name"],
-            url: reference.metadata?.["web-view-link"],
-            path: reference.metadata?.["path"],
-        });
+    for (const sourceId of modelResponse.usedSources) {
+        const reference = retrieved.retrievalResults[sourceId - 1]
+        if (reference) {
+            response.citations.push({
+                quote: reference.content?.text ?? "",
+                name: reference.metadata?.["file-name"],
+                url: reference.metadata?.["web-view-link"],
+                path: reference.metadata?.["path"],
+            });
+        }
     }
+    // for (const reference of retrieved.retrievalResults) {
+    //     response.citations.push({
+    //         quote: reference.content?.text ?? "",
+    //         name: reference.metadata?.["file-name"],
+    //         url: reference.metadata?.["web-view-link"],
+    //         path: reference.metadata?.["path"],
+    //     });
+    // }
 
     return {
         statusCode: 200,
