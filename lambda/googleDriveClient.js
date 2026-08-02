@@ -28,7 +28,7 @@ class GoogleDriveClient {
 
         const secret = await this.secrets.send(
             new GetSecretValueCommand({
-                SecretId: "demo-google-service-account",
+                SecretId: this.secretId,
             })
         );
         const credentials = JSON.parse(secret.SecretString);

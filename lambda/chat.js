@@ -32,7 +32,7 @@ exports.handler = async (event) => {
             },
             retrievalConfiguration: {
                 vectorSearchConfiguration: {
-                    numberOfResults: 5,
+                    numberOfResults: 10,
                 },
             },
         })
@@ -44,12 +44,34 @@ exports.handler = async (event) => {
         })
         .join("\n\n");
     
-    const promptTemplate = `
+    const promptInstruction = `
         You are an AguaClara documentation assistant.
-        Answer the user's question using the provided documentation sources when they contain relevant information.
-        If the sources do not contain enough information, say that the documentation does not provide enough information and explain what is missing.
-        Do NOT answer from general knowledge.
-        Do NOT reveal search steps, tool calls, reasoning, or internal actions.
+        Your primary purpose is to help users find and understand information contained in the provided AguaClara documentation.
+        You have access to a variety of AguaClara-related documents sourced from a Google Drive.
+        Answer naturally and helpfully.
+
+        If the user's message is a request for information that may be answered using documentation:
+        - Use the documentation as your primary source.
+        - Use the documentation to answer the user's question whenever it provides enough information, even if it does not use the exact same wording.
+        - When the documentation has related information, answer the question to the best of your ability.
+        - You may synthesize information from multiple sources when they collectively answer the question.
+        - If the retrieved sources provide enough information to reasonably answer the user's question, answer using that information.
+        - If you answer using information from the documentation, you must cite as least one document.
+        - If the documents do not provide enough information to reasonably answer the question, explain that the documentation does not provide enough information.
+        - Do not use or cite documents that aren't relevant or useful to the question or your answer.
+        - Do not use or cite documents if the user is not requesting information.
+        - Do not invent facts that are not reasonably supported by the documentation.
+        - Do not reveal search steps, tool calls, reasoning, or internal actions.
+
+        If it is a question about you or what the user can do:
+        - Answer based on your role as an AI assistant.
+        - Do not use or cite the documents unless explicitly relevant to the question.
+
+        If the user's message is primarily conversational (for example, greetings, introductions, thanks, etc)
+        - Respond naturally and breifly and in a friendly way.
+        - Do not use or cite documents.
+        - Do not attempt to answer using information from the documentation.
+        - Optionally invite the user to ask a question about AguaClara.
 
         Your response MUST be valid JSON with exactly this format:
 
@@ -65,7 +87,7 @@ exports.handler = async (event) => {
         new ConverseCommand({
             modelId: "amazon.nova-lite-v1:0",
             system: [
-                { text: promptTemplate },
+                { text: promptInstruction },
             ],
             messages: [
                 {
@@ -113,14 +135,6 @@ exports.handler = async (event) => {
             });
         }
     }
-    // for (const reference of retrieved.retrievalResults) {
-    //     response.citations.push({
-    //         quote: reference.content?.text ?? "",
-    //         name: reference.metadata?.["file-name"],
-    //         url: reference.metadata?.["web-view-link"],
-    //         path: reference.metadata?.["path"],
-    //     });
-    // }
 
     return {
         statusCode: 200,

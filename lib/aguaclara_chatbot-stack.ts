@@ -1,13 +1,11 @@
 import * as cdk from 'aws-cdk-lib';
-import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
-import * as s3n from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as iam from 'aws-cdk-lib/aws-iam';
 
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
-import * as events from 'aws-cdk-lib/aws-events';
-import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as sqs from "aws-cdk-lib/aws-sqs";
+import * as lambdaEventSources from "aws-cdk-lib/aws-lambda-event-sources";
 
 import { Construct } from 'constructs';
 import { KnowledgeBase } from '../constructs/knowledge-base';
@@ -20,6 +18,11 @@ export class AguaclaraChatbotStack extends cdk.Stack {
     const kb = new KnowledgeBase(this, 'Knowledgebase');
     const documentsBucket = kb.documentsBucket;
     
+    // SQS Queues
+    const driveSyncQueue = new sqs.Queue(this, "DriveSyncQueue", {
+      visibilityTimeout: cdk.Duration.minutes(15),
+    });
+
     // Lambdas
     const syncLambda = new lambda.Function(this, 'GoogleDriveSyncLambda', {
         runtime: lambda.Runtime.NODEJS_22_X,
@@ -58,12 +61,20 @@ export class AguaclaraChatbotStack extends cdk.Stack {
     );
 
     // Secrets
+    const googleSecretDemo = secretsmanager.Secret.fromSecretNameV2(
+      this,
+      'GoogleDriveSecretDemo',
+      'demo-google-service-account'
+    );
+    googleSecretDemo.grantRead(syncLambda);
+    
     const googleSecret = secretsmanager.Secret.fromSecretNameV2(
       this,
       'GoogleDriveSecret',
-      'demo-google-service-account'
+      'chatbot-drive-sync-key'
     );
     googleSecret.grantRead(syncLambda);
+
     syncLambda.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
