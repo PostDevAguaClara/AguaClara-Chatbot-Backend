@@ -5,12 +5,6 @@ const {
     GetSecretValueCommand 
 } = require("@aws-sdk/client-secrets-manager");
 const { 
-    S3Client, 
-    PutObjectCommand, 
-    DeleteObjectCommand, 
-    HeadObjectCommand 
-} = require("@aws-sdk/client-s3");
-const { 
     SSMClient, 
     GetParameterCommand, 
     PutParameterCommand 
@@ -27,7 +21,6 @@ const BUCKET = process.env.INPUT_BUCKET;
 const KB_ID = process.env.KNOWLEDGEBASE_ID;
 const KB_SOURCE_ID = process.env.KNOWLEDGEBASE_SOURCE_ID;
 
-const s3 = new S3Client({});
 const ssm = new SSMClient({});
 const secrets = new SecretsManagerClient({});
 const kbClient = new BedrockAgentClient({});
@@ -89,7 +82,7 @@ exports.handler = async () => {
 };
 
 /**
- * Synchronizes a change in the Google Drive to the S3 bucket
+ * Synchronizes a change in the Google Drive to the Knowledge Base
  * 
  * @param change A token for a change in the Google Drive
  */
@@ -98,16 +91,8 @@ async function syncChange(change) {
 
     // File deletion
     if (change.removed || change.file.trashed) {
-        console.log("Deleting document...");
-        // Delete from S3
-        // await s3.send(
-        //     new DeleteObjectCommand({
-        //         Bucket: BUCKET,
-        //         Key: fileId,
-        //     })
-        // );
+        console.log("Deleting document from KB...");
 
-        // Delete from knowledgebase
         await kbClient.send(
             new DeleteKnowledgeBaseDocumentsCommand({
                 knowledgeBaseId: KB_ID,
@@ -128,38 +113,19 @@ async function syncChange(change) {
     console.log("Syncing file:", fileName, `\t Type: ${metaData.mimeType}`);
 
     if (!DOWNLOADABLE_MIME_TYPES.has(metaData.mimeType)) {
-        console.log(
-            `Skipping document ${fileName}\n
-                Reason: Unsupported type ${JSON.stringify(metaData.mimeType, null, 2)}`
+        console.log(`Skipping document ${fileName}\n
+            Reason: Unsupported type ${JSON.stringify(metaData.mimeType, null, 2)}`
         );
         return;
     }
 
     // Download file from Drive
-    console.log("Importing from Drive:", fileName);
+    console.log("Importing from Drive...");
     const { body, contentType } = await drive.getContent(fileId, metaData.mimeType);
     const path = await drive.getFilePath(metaData.name, metaData.parents);
-    
-    // Upload to S3
-    // console.log("Uploading document to S3:", fileId);
-    // await s3.send(
-    //     new PutObjectCommand({
-    //         Bucket: BUCKET,
-    //         Key: fileId,
-    //         Body: body,
-    //         ContentType: contentType,
-    //         Metadata: {
-    //             "file-id": fileId,
-    //             "file-name": fileName,
-    //             "modified-time": metaData.modifiedTime,
-    //             "web-view-link": metaData.webViewLink,
-    //             "path": path,
-    //         }
-    //     })
-    // );
 
     // Ingest document into knowledgebase
-    console.log("Ingesting document:", fileId);
+    console.log("Ingesting document...");
     const document = {
         content: {
             dataSourceType: "CUSTOM",
@@ -196,14 +162,6 @@ async function syncChange(change) {
         }
     };
 
-    console.log("Ingestion:", {
-        knowledgeBaseId: KB_ID,
-        dataSourceId: KB_SOURCE_ID,
-        KBytes: body.length / 1024,
-        type: contentType,
-        isBuffer: Buffer.isBuffer(body),
-        firstBytes: body.slice(0, 4).toString("hex")
-    });
     const result = await kbClient.send(
         new IngestKnowledgeBaseDocumentsCommand({
             knowledgeBaseId: KB_ID,
@@ -211,6 +169,5 @@ async function syncChange(change) {
             documents: [ document ]
         })
     );
-    console.log("Ingestion result:", JSON.stringify(result, null, 2));
 }
 

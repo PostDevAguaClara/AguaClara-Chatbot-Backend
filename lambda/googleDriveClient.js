@@ -14,7 +14,7 @@ const GOOGLE_EXPORTS_TYPES = {
 };
 
 class GoogleDriveClient {
-    constructor(secretId = "demo-google-service-account",
+    constructor(secretId = "chatbot-drive-sync-key",
                 tokenParameter = "/chatbot/demo-drive/lastSyncToken") {
         this.secretId = secretId;
         this.tokenParameter = tokenParameter;
@@ -60,7 +60,9 @@ class GoogleDriveClient {
     async getChanges(pageToken) {
         const result = await this.request("/drive/v3/changes", {
                 params: {
-                    pageToken: pageToken,
+                    pageToken,
+                    supportsAllDrives: true,
+                    includeItemsFromAllDrives: true,
                     fields:
                         "nextPageToken,newStartPageToken,\
                         changes(fileId,removed,file(id,name,mimeType,modifiedTime,trashed))"
@@ -71,6 +73,24 @@ class GoogleDriveClient {
         return result;
     }
 
+    async watchChanges(pageToken, webhookUrl) {
+        return this.request("/drive/v3/changes/watch", {
+            method: "POST",
+            params: {
+                pageToken,
+                supportsAllDrives: true,
+                includeItemsFromAllDrives: true,
+            },
+            data: {
+                id: crypto.randomUUID(),
+                type: "web_hook",
+                address: webhookUrl,
+                token: process.env.WEBHOOK_SECRET ?? "drive-sync",
+            }
+        });
+    }
+
+    // === File Management
     async getMetaData(fileId) {
         return this.request(`/drive/v3/files/${fileId}`, {
             params: {
@@ -133,7 +153,7 @@ class GoogleDriveClient {
         return await this.getFilePath(`${data.name}/${name}`, data.parents);
     }
 
-    // ==== Token management
+    // === Token management
     async savePageToken(pageToken) {
         await this.ssm.send(
             new PutParameterCommand({

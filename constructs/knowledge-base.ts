@@ -1,6 +1,5 @@
 //knowledge-base.ts
 import * as cdk from 'aws-cdk-lib';
-import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as s3vectors from 'aws-cdk-lib/aws-s3vectors';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as bedrock from 'aws-cdk-lib/aws-bedrock';
@@ -13,19 +12,12 @@ export class KnowledgeBase extends Construct {
   public readonly knowledgeBaseId: string;
   public readonly knowledgeBaseArn: string;
   public readonly dataSourceId: string;
-  public readonly documentsBucket: s3.Bucket;
 
   constructor(scope: Construct, id: string) {
     super(scope, id);
     const region = cdk.Stack.of(this).region;
     const embeddingModelArn = 
         `arn:aws:bedrock:${region}::foundation-model/amazon.titan-embed-text-v2:0`;
-
-    // S3
-    const documentsBucket = new s3.Bucket(this, "ChatbotDocuments", {
-        removalPolicy: cdk.RemovalPolicy.DESTROY,
-        autoDeleteObjects: true,
-    });
 
     // S3 Vector
     const vectorBucket = new s3vectors.CfnVectorBucket(this, 'VectorBucket', {})
@@ -47,12 +39,6 @@ export class KnowledgeBase extends Construct {
     const kbRole = new iam.Role(this, 'kbRole', {
         assumedBy: new iam.ServicePrincipal("bedrock.amazonaws.com")
     });
-    kbRole.addToPolicy(
-        new iam.PolicyStatement({
-            actions: ["s3:GetObject", "s3:ListBucket"],
-            resources: [documentsBucket.bucketArn, `${documentsBucket.bucketArn}/*`]
-        })
-    );
     kbRole.addToPolicy(
         new iam.PolicyStatement({
             actions: ["bedrock:InvokeModel"],
@@ -96,17 +82,14 @@ export class KnowledgeBase extends Construct {
     // Data Source
     const dataSource = new bedrock.CfnDataSource(this, 'ChatbotDataSource', {
         name: 'chatbot-data-source',
-        description: 'The custome data source for the AguaClara chatbot KB',
+        description: 'The custome data source for the AguaClara chatbot KB',    // TODO: Typo
         knowledgeBaseId: kb.attrKnowledgeBaseId,
-        dataSourceConfiguration: {
-            type: 'CUSTOM',
-        }
+        dataSourceConfiguration: { type: 'CUSTOM' }
     })
 
     // Exposed values
     this.knowledgeBaseId = kb.attrKnowledgeBaseId;
     this.knowledgeBaseArn = kb.attrKnowledgeBaseArn;
     this.dataSourceId = dataSource.attrDataSourceId;
-    this.documentsBucket = documentsBucket;
   }
 }
