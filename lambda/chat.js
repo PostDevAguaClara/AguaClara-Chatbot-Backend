@@ -68,7 +68,7 @@ exports.handler = async (event) => {
         - Do not use or cite the documents unless explicitly relevant to the question.
 
         If the user's message is primarily conversational (for example, greetings, introductions, thanks, etc)
-        - Respond naturally and breifly and in a friendly way.
+        - Respond naturally and briefly and in a friendly way.
         - Do not use or cite documents.
         - Do not attempt to answer using information from the documentation.
         - Optionally invite the user to ask a question about AguaClara.

@@ -70,6 +70,7 @@ export class KnowledgeBase extends Construct {
         },
         storageConfiguration: {
             type: 'S3_VECTORS',
+            
             s3VectorsConfiguration: {
                 vectorBucketArn: vectorBucket.attrVectorBucketArn,
                 indexArn: vectorIndex.attrIndexArn,

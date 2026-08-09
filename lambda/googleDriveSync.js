@@ -16,7 +16,7 @@ const {
   GetKnowledgeBaseDocumentsCommand
 } = require("@aws-sdk/client-bedrock-agent");
 
-const PARAM_NAME = "/chatbot/demo-drive/lastSyncToken";
+const PARAM_NAME = "/chatbot/drive/lastSyncToken";
 const BUCKET = process.env.INPUT_BUCKET;
 const KB_ID = process.env.KNOWLEDGEBASE_ID;
 const KB_SOURCE_ID = process.env.KNOWLEDGEBASE_SOURCE_ID;
@@ -41,28 +41,37 @@ const DOWNLOADABLE_MIME_TYPES = new Set([
 const GoogleDriveClient = require("./googleDriveClient");
 const drive = new GoogleDriveClient("chatbot-drive-sync-key");
 
-exports.handler = async () => {
+
+exports.handler = async (event) => {
     console.log("GOOGLE SYNC STARTED");
 
     // Load/init sync page token
     let pageToken = await drive.loadPageToken();
-    if (!pageToken) { pageToken = await drive.createPageToken(); }
+    if (!pageToken) { 
+        // pageToken = await drive.createPageToken();
+        throw new Error(
+            "Drive sync has not been initialized. " +
+            "Run the full synchronization Lambda first."
+        );
+    }
+    console.log("Loaded page token:", pageToken);
 
     // Process changes
+    let changeTally = { changes: 0, ingested: 0, deleted: 0 }
     let newStartToken = pageToken;
     while (pageToken) {
         const result = await drive.getChanges(pageToken);
-
+        changeTally.changes = result.changes?.length;
+        
         // Iteratively sync changes
         for (const change of result.changes) {
             console.log("CHANGE:", JSON.stringify(change, null, 2));
             try {
-                await syncChange(change);
+                const sync = await syncChange(change);
+                if     (sync == "ingested") { changeTally.ingested +=1; }
+                else if (sync == "deleted") { changeTally.deleted += 1; }
             } catch (err) {
-                console.error(
-                    "Failed to sync file:", change.fileId,
-                    err
-                );
+                console.error("Failed to sync file:", change.fileId, err);
                 throw err;
             }
         }
@@ -72,12 +81,19 @@ exports.handler = async () => {
     }
 
     // Update persistant sync token
+    console.log("Saving token:", newStartToken);
     await drive.savePageToken(newStartToken);
     
-    console.log("SYNC COMPLETE");
+    console.log("SYNC COMPLETE:", JSON.stringify(changeTally, null, 2));
     return {
         statusCode: 200,
-        body: "Sync complete"
+        body: JSON.stringify({
+            success: true,
+            changes: changeTally.changes,
+            ingested: changeTally.ingested,
+            deleted: changeTally.deleted,
+            newStartToken: newStartToken,
+        }),
     };
 };
 
@@ -105,18 +121,18 @@ async function syncChange(change) {
                 ]
             })
         );
-        return;
+        return "deleted";
     }
 
     const metaData = await drive.getMetaData(fileId);
     const fileName = metaData.name;
-    console.log("Syncing file:", fileName, `\t Type: ${metaData.mimeType}`);
+    console.log("Syncing file:", fileName, `,\t Type: ${metaData.mimeType}`);
 
     if (!DOWNLOADABLE_MIME_TYPES.has(metaData.mimeType)) {
         console.log(`Skipping document ${fileName}\n
             Reason: Unsupported type ${JSON.stringify(metaData.mimeType, null, 2)}`
         );
-        return;
+        return "skipped";
     }
 
     // Download file from Drive
@@ -169,5 +185,7 @@ async function syncChange(change) {
             documents: [ document ]
         })
     );
+
+    return "ingested";
 }
 

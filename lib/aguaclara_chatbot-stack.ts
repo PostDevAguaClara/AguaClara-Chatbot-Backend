@@ -23,18 +23,20 @@ export class AguaclaraChatbotStack extends cdk.Stack {
     });
 
     // == Lambdas
-    const receiverLambda = new lambda.Function(this, 'GoogleDriveReiverLambda', {
+    // Reciver
+    const receiverLambda = new lambda.Function(this, 'GoogleDriveReceiverLambda', {
         runtime: lambda.Runtime.NODEJS_22_X,
         handler: 'googleDriveReceiver.handler',
         code: lambda.Code.fromAsset('lambda'),
         environment: {
           QUEUE_URL: driveSyncQueue.queueUrl
         },
-        timeout: cdk.Duration.minutes(10),
+        timeout: cdk.Duration.seconds(10),
         memorySize: 256,
     });
     driveSyncQueue.grantSendMessages(receiverLambda);
 
+    // Sync
     const syncLambda = new lambda.Function(this, 'GoogleDriveSyncLambda', {
         runtime: lambda.Runtime.NODEJS_22_X,
         handler: 'googleDriveSync.handler',
@@ -45,6 +47,7 @@ export class AguaclaraChatbotStack extends cdk.Stack {
         },
         timeout: cdk.Duration.minutes(10),
         memorySize: 256,
+        reservedConcurrentExecutions: 1,
     });
     syncLambda.addToRolePolicy(
       new iam.PolicyStatement({
@@ -53,7 +56,7 @@ export class AguaclaraChatbotStack extends cdk.Stack {
           "ssm:PutParameter"
         ],
         resources: [
-          `arn:aws:ssm:${this.region}:${this.account}:parameter/chatbot/demo-drive/*`
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/chatbot/drive/*`
         ]
       })
     );
@@ -75,7 +78,8 @@ export class AguaclaraChatbotStack extends cdk.Stack {
         ]
       })
     );
-
+    
+    // Chat
     const chatLambda = new lambda.Function(this, "ChatLambda", {
       runtime: lambda.Runtime.NODEJS_22_X,
       handler: "chat.handler",
@@ -97,14 +101,52 @@ export class AguaclaraChatbotStack extends cdk.Stack {
       })
     );
 
-    chatLambda.addToRolePolicy(
+    // Full Drive Sync
+    const fullSyncLambda = new lambda.Function(
+      this,
+      "GoogleDriveFullSyncLambda",
+      {
+        runtime: lambda.Runtime.NODEJS_22_X,
+        handler: "googleDriveFullSync.handler",
+        code: lambda.Code.fromAsset("lambda"),
+
+        environment: {
+          KNOWLEDGEBASE_ID: kb.knowledgeBaseId,
+          KNOWLEDGEBASE_SOURCE_ID: kb.dataSourceId,
+        },
+
+        timeout: cdk.Duration.minutes(15),
+        memorySize: 512,
+      }
+    );
+    fullSyncLambda.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
-          "bedrock:Retrieve",
-          "bedrock:RetrieveAndGenerate",
-          "bedrock:InvokeModel",
+          "ssm:GetParameter",
+          "ssm:PutParameter",
         ],
-        resources: ["*"],
+        resources: [
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/chatbot/drive/*`,
+        ],
+      })
+    );
+    fullSyncLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: "UpdateBedrockDocuments",
+        actions: [
+          "bedrock:IngestKnowledgeBaseDocuments",
+          "bedrock:DeleteKnowledgeBaseDocuments",
+          "bedrock:StartIngestionJob",
+          "bedrock:GetIngestionJob",
+          "bedrock:ListIngestionJobs",
+          "bedrock:GetKnowledgeBase",
+          "bedrock:GetDataSource",
+          "bedrock:GetKnowledgeBaseDocuments",
+          "bedrock:ListKnowledgeBaseDocuments",
+        ],
+        resources: [
+          "*"
+        ]
       })
     );
 
@@ -114,6 +156,7 @@ export class AguaclaraChatbotStack extends cdk.Stack {
       'chatbot-drive-sync-key'
     );
     googleSecret.grantRead(syncLambda);
+    googleSecret.grantRead(fullSyncLambda);
 
     // API Gateways
     const syncApi = new apigateway.LambdaRestApi(this, 'DriveSyncApi', {
@@ -133,44 +176,85 @@ export class AguaclaraChatbotStack extends cdk.Stack {
       proxy: true,
     });
     new cdk.CfnOutput(this, 'ChatApiUrl', { value: chatApi.url });
+    
+    const fullSyncApi = new apigateway.LambdaRestApi(this, 'DriveFullSyncApi', {
+      handler: fullSyncLambda,
+      proxy: true,
+    });
+    new cdk.CfnOutput(this, 'FullSyncApiUrl', { value: fullSyncApi.url });
 
-    // Triggers
-    syncLambda.addEventSource(
-      new lambdaEventSources.SqsEventSource(driveSyncQueue, {
-        batchSize: 1,
-        maxBatchingWindow: cdk.Duration.seconds(0),
+    // Watch
+    const watchLambdaName = "aguaclara-drive-watch";
+    const schedulerRoleName = "aguaclara-drive-watch-scheduler";
+
+    const schedulerRole = new iam.Role(this, "DriveWatchSchedulerRole", {
+      roleName: schedulerRoleName,
+      assumedBy: new iam.ServicePrincipal("scheduler.amazonaws.com"),
+    });
+    schedulerRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["lambda:InvokeFunction"],
+        resources: ["*"],
       })
     );
 
-    
-    const registerLambda = new lambda.Function(this, "RegisterLambda", {
+    const watchLambda = new lambda.Function(this, "DriveWatchLambda", {
+      functionName: watchLambdaName,
       runtime: lambda.Runtime.NODEJS_22_X,
-      handler: "register.handler",
+      handler: "googleDriveWatch.handler",
       code: lambda.Code.fromAsset("lambda"),
       environment: {
         WEBHOOK_URL: receiverApi.url,
+        SCHEDULER_ROLE_ARN: `arn:aws:iam::${this.account}:role/${schedulerRoleName}`,
       },
       timeout: cdk.Duration.seconds(30),
       memorySize: 512,
     });
-    googleSecret.grantRead(registerLambda);
-    registerLambda.addToRolePolicy(
+    watchLambda.addEnvironment(
+      "WATCH_LAMBDA_ARN", 
+      `arn:aws:lambda:${this.region}:${this.account}:function:${watchLambdaName}`
+    );
+    googleSecret.grantRead(watchLambda);
+    watchLambda.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
           "ssm:GetParameter",
           "ssm:PutParameter"
         ],
         resources: [
-          `arn:aws:ssm:${this.region}:${this.account}:parameter/chatbot/demo-drive/*`
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/chatbot/drive/*`
         ]
       })
     );
+    watchLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["scheduler:CreateSchedule"],
+        resources: ["*"],
+      })
+    );
+    watchLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["iam:PassRole"],
+        resources: [
+          `arn:aws:iam::${this.account}:role/aguaclara-drive-watch-scheduler`
+        ],
+      })
+    );
 
-    const registerApi = new apigateway.LambdaRestApi(this, 'RegisterApi', {
-      handler: registerLambda,
+    const watchAPI = new apigateway.LambdaRestApi(this, 'WatchAPI', {
+      handler: watchLambda,
       proxy: true,
     });
-    new cdk.CfnOutput(this, 'RegisterApiUrl', { value: registerApi.url });
+    new cdk.CfnOutput(this, 'WatchApiUrl', { value: watchAPI.url });
+
+    // === Triggers
+    // SQS Events
+    syncLambda.addEventSource(
+      new lambdaEventSources.SqsEventSource(driveSyncQueue, {
+        batchSize: 1,
+        maxBatchingWindow: cdk.Duration.seconds(0)
+      })
+    );
 
   }
 }

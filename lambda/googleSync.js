@@ -22,7 +22,7 @@ const {
   GetKnowledgeBaseDocumentsCommand
 } = require("@aws-sdk/client-bedrock-agent");
 
-const PARAM_NAME = "/chatbot/demo-drive/lastSyncToken";
+const PARAM_NAME = "/chatbot/drive/lastSyncToken";
 const BUCKET = process.env.INPUT_BUCKET;
 const KB_ID = process.env.KNOWLEDGEBASE_ID;
 const KB_SOURCE_ID = process.env.KNOWLEDGEBASE_SOURCE_ID;

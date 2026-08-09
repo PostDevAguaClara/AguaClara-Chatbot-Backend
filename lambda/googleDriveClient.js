@@ -13,11 +13,13 @@ const GOOGLE_EXPORTS_TYPES = {
     "application/vnd.google-apps.spreadsheet":  "text/csv"
 };
 
+const DRIVE_KEY                 = "chatbot-drive-sync-key";
+const SYNC_TOKEN_PARAMETER      = "/chatbot/drive/lastSyncToken";
+const WATCH_CHANNEL_PARAMETER   = "/chatbot/drive/watchChannel";
+
 class GoogleDriveClient {
-    constructor(secretId = "chatbot-drive-sync-key",
-                tokenParameter = "/chatbot/demo-drive/lastSyncToken") {
+    constructor(secretId = "chatbot-drive-sync-key") {
         this.secretId = secretId;
-        this.tokenParameter = tokenParameter;
         this.secrets = new SecretsManagerClient({});
         this.ssm = new SSMClient({});
         this.authClient = null;
@@ -73,28 +75,28 @@ class GoogleDriveClient {
         return result;
     }
 
-    async watchChanges(pageToken, webhookUrl) {
-        return this.request("/drive/v3/changes/watch", {
-            method: "POST",
-            params: {
-                pageToken,
-                supportsAllDrives: true,
-                includeItemsFromAllDrives: true,
-            },
-            data: {
-                id: crypto.randomUUID(),
-                type: "web_hook",
-                address: webhookUrl,
-                token: process.env.WEBHOOK_SECRET ?? "drive-sync",
-            }
-        });
+    async getFiles(pageToken) {
+        const params = {
+            pageToken: pageToken,
+            pageSize: 1000,
+            fields: "nextPageToken,incompleteSearch,\
+                    files(id,name,mimeType,modifiedTime,webViewLink,parents,trashed)",
+            q: "trashed = false",
+            supportsAllDrives: true,
+            includeItemsFromAllDrives: true,
+        };
+        const result = await this.request("/drive/v3/files", { params } );
+        result.files ??= []; // Ensure changes is non-null and iterable
+        return result;
     }
+
 
     // === File Management
     async getMetaData(fileId) {
         return this.request(`/drive/v3/files/${fileId}`, {
             params: {
-                fields: "name,mimeType,modifiedTime,webViewLink,parents"
+                fields: "name,mimeType,modifiedTime,webViewLink,parents",
+                supportsAllDrives: true
             }
         });
     }
@@ -115,7 +117,8 @@ class GoogleDriveClient {
         const body = Buffer.from(
             await this.request(`/drive/v3/files/${fileId}`, {
                     params: {
-                        alt: "media"
+                        alt: "media",
+                        supportsAllDrives: true
                     },
                     responseType: "arraybuffer"
                 }
@@ -128,7 +131,8 @@ class GoogleDriveClient {
         const body = Buffer.from(
             await this.request(`/drive/v3/files/${fileId}/export`, {
                     params: {
-                        mimeType: exportType
+                        mimeType: exportType,
+                        supportsAllDrives: true
                     },
                     responseType: "arraybuffer"
                 }
@@ -148,16 +152,19 @@ class GoogleDriveClient {
         let parentId = parents[0];
 
         const data = await this.request(`/drive/v3/files/${parentId}`, {
-            params: { fields: "id,name,parents" }
+            params: { 
+                fields: "id,name,parents",
+                supportsAllDrives: true
+            }
         });
         return await this.getFilePath(`${data.name}/${name}`, data.parents);
     }
 
-    // === Token management
+    // === Sync Tokens
     async savePageToken(pageToken) {
         await this.ssm.send(
             new PutParameterCommand({
-                Name: this.tokenParameter,
+                Name: SYNC_TOKEN_PARAMETER,
                 Value: pageToken,
                 Type: "String",
                 Overwrite: true
@@ -171,18 +178,16 @@ class GoogleDriveClient {
      */
     async loadPageToken() {
         let pageToken;
-        // Load token
-        try {
+        try { 
             const result = await this.ssm.send(
                 new GetParameterCommand({
-                    Name: this.tokenParameter
+                    Name: SYNC_TOKEN_PARAMETER
                 })
             );
 
             pageToken = result.Parameter.Value;
-        } catch {
-            return null;
-        }
+        } 
+        catch { return null; }
 
         // Validate token
         try {
@@ -202,6 +207,68 @@ class GoogleDriveClient {
         const result = await this.request("/drive/v3/changes/startPageToken");
         await this.savePageToken(result.startPageToken);
         return result.startPageToken;
+    }
+
+    // === Watch Channels
+    async startWatchChannel(address) {
+        let pageToken = await this.loadPageToken();
+        if (!pageToken) { pageToken = await this.createPageToken(); }
+
+        const watch = await this.request("/drive/v3/changes/watch", {
+            method: "POST",
+            params: {
+                pageToken,
+                supportsAllDrives: true,
+                includeItemsFromAllDrives: true,
+            },
+            data: {
+                id: crypto.randomUUID(),
+                type: "web_hook",
+                address: address,
+                token: process.env.WEBHOOK_SECRET ?? "drive-sync",
+            }
+        });
+        
+        return {
+            id: watch.id,
+            resourceId: watch.resourceId,
+            address: address,
+            expiration: Number(watch.expiration)
+        };
+    }
+
+    async stopWatchChannel(channel) {
+        return this.request("/drive/v3/channels/stop", {
+            method: "POST",
+            data: {
+                id: channel.id,
+                resourceId: channel.resourceId,
+            },
+        });
+    }
+
+    async saveWatchChannel(channel) {
+        await this.ssm.send(
+            new PutParameterCommand({
+                Name: WATCH_CHANNEL_PARAMETER,
+                Value: JSON.stringify(channel),
+                Type: "String",
+                Overwrite: true
+            })
+        );
+    }
+
+    async loadWatchChannel() {
+        try {
+            const result = await this.ssm.send(
+                new GetParameterCommand({
+                    Name: "/chatbot/drive/watchChannel"
+                })
+            );
+            return JSON.parse(result.Parameter.Value);
+        } catch {
+            return null;
+        }
     }
 
 }
