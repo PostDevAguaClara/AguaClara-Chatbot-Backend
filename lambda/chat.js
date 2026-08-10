@@ -1,3 +1,11 @@
+/**
+ * chat.js
+ * 
+ * This is the interfacing between the Chatbot UI and the chat model.
+ * 
+ * It takes in a json argument which must have `lastMessage` be the current user question and
+ * `conversation` be the message history in the format [{role: <"user"/"assistant">, content: "..."}].
+ */
 const {
     BedrockAgentRuntimeClient,
     RetrieveCommand,
@@ -11,24 +19,45 @@ const {
 const retrieveClient = new BedrockAgentRuntimeClient({});
 const runtimeClient = new BedrockRuntimeClient({});
 
+const MODEL_ID = "amazon.nova-lite-v1:0";
+
 exports.handler = async (event) => {
-
     const body = JSON.parse(event.body ?? "{}");
+    console.log("User Input: ", JSON.stringify(body, null, 2));
 
-    if (!body.prompt) {
-        return {
-            statusCode: 400,
+    if (!body.lastMessage) {
+        return {statusCode: 400,
             body: JSON.stringify({
-                error: "Missing prompt"
+                error: "Missing last message"
             })
         };
     }
+    if (!body.conversation) {
+        return {statusCode: 400,
+            body: JSON.stringify({
+                error: "Missing conversation"
+            })
+        };
+    }
+
+    // Retrieve relevant documents using only recent user messages
+    const recentUserMessages = body.conversation
+        .filter(message => message.role === "user")
+        .slice(-5,-1);
+
+    const retrievalQuery = [
+        `Use the recent conversation to understand the context of the current question.
+        Retrieve documentation relevant to the current question, including concepts implied by the conversation.
+        \nRecent conversation:`,
+        ...recentUserMessages.map(message => `User: ${message.text}`),
+        `\nCurrent question: ${body.lastMessage}`,
+    ].join("\n");
 
     const retrieved = await retrieveClient.send(
         new RetrieveCommand({
             knowledgeBaseId: process.env.KNOWLEDGEBASE_ID,
             retrievalQuery: {
-                text: body.prompt,
+                text: retrievalQuery,
             },
             retrievalConfiguration: {
                 vectorSearchConfiguration: {
@@ -38,12 +67,15 @@ exports.handler = async (event) => {
         })
     );
 
+    // Tag each with IDs so the model can indentify which sources they used
     const context = retrieved.retrievalResults
         .map((reference, i) => {
             return `<source id=${i + 1}> ${reference.content?.text ?? ""} <\source>`;
         })
         .join("\n\n");
     
+    console.log("Context Documents: ", JSON.stringify(context, null, 2));
+
     const promptInstruction = `
         You are an AguaClara documentation assistant.
         Your primary purpose is to help users find and understand information contained in the provided AguaClara documentation.
@@ -62,8 +94,10 @@ exports.handler = async (event) => {
         - Do not use or cite documents if the user is not requesting information.
         - Do not invent facts that are not reasonably supported by the documentation.
         - Do not reveal search steps, tool calls, reasoning, or internal actions.
+        - Consider the entire conversation when determining what the user is asking about.
+        - Use the current question together with the conversation history to resolve references such as "it", "they", "this", or "that".
 
-        If it is a question about you or what the user can do:
+        If the user's message is a question about you or what the user can do:
         - Answer based on your role as an AI assistant.
         - Do not use or cite the documents unless explicitly relevant to the question.
 
@@ -73,37 +107,63 @@ exports.handler = async (event) => {
         - Do not attempt to answer using information from the documentation.
         - Optionally invite the user to ask a question about AguaClara.
 
-        Your response MUST be valid JSON with exactly this format:
-
+        Response formatting:
+        - Your response MUST be valid JSON with exactly this format:
         {
             "answer": "The natural language answer to the user.",
             "usedSources": [1, 3]
         }
+        - The "usedSources" array must contain ONLY the source IDs that directly support your answer.
+        - If no provided sources support the answer, "usedSources" must be an empty array.
+        - The "answer" field must contain ONLY the natural-language answer to the user.
+        - NEVER put source IDs, citations, citation labels, or references such as "[Sources: 1, 2, 4]" in the "answer" field.
+        - Source selection belongs exclusively in the "usedSources" array.
+        - Do not mention the existence of "usedSources" to the user.
+        - Do not mention source IDs in the natural-language answer.
 
-        The "usedSources" array must contain ONLY the source IDs that directly support your answer.
-        If no provided sources support the answer, "usedSources" must be an empty array.
+        Source citation rules:
+        - A source may be included in "usedSources" ONLY if information from that source directly supports a factual claim made in the answer.
+        - Do NOT cite a source merely because it discusses the same general topic.
+        - Do NOT cite a source merely because it contains words or concepts related to the question.
+        - Do NOT cite a source because it was useful for understanding the question.
+        - Do NOT cite a source if the answer could remain unchanged without information from that source.
+        - If multiple sources are necessary, cite each source only for the claims it actually supports.
+        - When the retrieved sources do not directly support a claim, do not cite them for that claim.
+        - Never infer that a source supports an answer simply because its subject matter is related.
     `
+
+    // Convert conversation into Bedrock Converse messages format
+    const messages = body.conversation.map((message, index) => {
+        if ((message.role !== "user" && message.role !== "assistant") ||
+            typeof message.content !== "string" ||
+            message.content.trim() === ""
+        ) {
+            throw new Error(
+                `Invalid conversation message at index ${index}: ` +
+                JSON.stringify(message)
+            );
+        }
+        const isLastMessage = (index === body.conversation.length - 1);
+        let text = message.content;
+        if (isLastMessage) {
+            text = `Documentation: ${context}\n\n`+
+                   `User Message: ${text}`
+        }
+        return {
+            role: message.role,
+            content: [{ text }],
+        };
+    });
+    
     const converseResult = await runtimeClient.send(
         new ConverseCommand({
-            modelId: "amazon.nova-lite-v1:0",
-            system: [
-                { text: promptInstruction },
-            ],
-            messages: [
-                {
-                    role: "user",
-                    content: [
-                        {
-                            text: `Documentation: ${context}
-                            Question: ${body.prompt}`,
-                        },
-                    ],
-                },
-            ],
+            modelId: MODEL_ID,
+            system: [{ text: promptInstruction }],
+            messages: messages,
         })
     );
 
-    // Build responce
+    // Build response
     const output = converseResult.output?.message?.content
         ?.map((c) => c.text ?? "")
         .join("") ?? "";
@@ -112,12 +172,13 @@ exports.handler = async (event) => {
     try {
         modelResponse = JSON.parse(output);
     } catch (e) {
-        console.error("Failed to parse model JSON:", output);
+        console.warn("Failed to parse model JSON:", output);
         modelResponse = {
             answer: output,
             usedSources: []
         };
     }
+    console.log("Model Response: ", modelResponse);
 
     const response = {
         sessionId: crypto.randomUUID(),
@@ -135,6 +196,7 @@ exports.handler = async (event) => {
             });
         }
     }
+    console.log("Output: ", response);
 
     return {
         statusCode: 200,

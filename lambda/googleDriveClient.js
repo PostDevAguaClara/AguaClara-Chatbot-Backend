@@ -1,4 +1,12 @@
-// googleDive.js
+/** 
+ * googleDive.js
+ * 
+ * This class handles all direct interfacing with the Google Drive API.
+ * 
+ * It's responsible for authenticating the client, retrieving Drive content, and managing 
+ * sync tokens and watch channels.
+ * 
+ */
 const { GoogleAuth } = require("google-auth-library");
 const { SecretsManagerClient, GetSecretValueCommand } = require("@aws-sdk/client-secrets-manager");
 const { 
