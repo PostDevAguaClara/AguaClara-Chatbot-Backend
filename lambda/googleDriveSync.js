@@ -47,14 +47,12 @@ exports.handler = async (event) => {
 
     // Load/init sync page token
     let pageToken = await drive.loadPageToken();
-    if (!pageToken) { 
-        // pageToken = await drive.createPageToken();
+    if (!pageToken) {
         throw new Error(
             "Drive sync has not been initialized. " +
             "Run the full synchronization Lambda first."
         );
     }
-    console.log("Loaded page token:", pageToken);
 
     // Process changes
     let changeTally = { changes: 0, ingested: 0, deleted: 0 }
@@ -68,7 +66,7 @@ exports.handler = async (event) => {
             console.log("CHANGE:", JSON.stringify(change, null, 2));
             try {
                 const sync = await syncChange(change);
-                if     (sync == "ingested") { changeTally.ingested +=1; }
+                if (sync == "ingested")     { changeTally.ingested +=1; }
                 else if (sync == "deleted") { changeTally.deleted += 1; }
             } catch (err) {
                 console.error("Failed to sync file:", change.fileId, err);
@@ -80,11 +78,9 @@ exports.handler = async (event) => {
         newStartToken = result.newStartPageToken;
     }
 
-    // Update persistant sync token
-    console.log("Saving token:", newStartToken);
+    // Update saved sync token
     await drive.savePageToken(newStartToken);
     
-    console.log("SYNC COMPLETE:", JSON.stringify(changeTally, null, 2));
     return {
         statusCode: 200,
         body: JSON.stringify({
@@ -107,48 +103,63 @@ async function syncChange(change) {
 
     // File deletion
     if (change.removed || change.file.trashed) {
-        console.log("Deleting document from KB...");
-
-        await kbClient.send(
-            new DeleteKnowledgeBaseDocumentsCommand({
-                knowledgeBaseId: KB_ID,
-                dataSourceId: KB_SOURCE_ID,
-                documentIdentifiers: [
-                    {
-                        dataSourceType: "CUSTOM",
-                        custom: { id: fileId }
-                    }
-                ]
-            })
-        );
+        console.log(`Deleting KB document ${fileId}`);
+        await deleteFile(fileId);
         return "deleted";
     }
 
     const metaData = await drive.getMetaData(fileId);
     const fileName = metaData.name;
-    console.log("Syncing file:", fileName, `,\t Type: ${metaData.mimeType}`);
 
     if (!DOWNLOADABLE_MIME_TYPES.has(metaData.mimeType)) {
-        console.log(`Skipping document ${fileName}\n
-            Reason: Unsupported type ${JSON.stringify(metaData.mimeType, null, 2)}`
+        console.log(`Skipping document ${fileName}\n` +
+                    `Reason: Unsupported type ${JSON.stringify(metaData.mimeType, null, 2)}`
         );
         return "skipped";
     }
+    
+    // Download from Drive and ingest to KB
+    console.log(`Ingesting document ${fileId} (${fileName})`);
+    await ingestFile(fileId, metaData);
+    return "ingested";
+}
 
-    // Download file from Drive
-    console.log("Importing from Drive...");
+/**
+ * Delete one document from the Bedrock custom data source.
+ * 
+ * @param fileId The Drive file id of the file
+ */
+async function deleteFile(fileId) {
+    await kbClient.send(
+        new DeleteKnowledgeBaseDocumentsCommand({
+            knowledgeBaseId: KB_ID,
+            dataSourceId: KB_SOURCE_ID,
+            documentIdentifiers: [
+                {
+                    dataSourceType: "CUSTOM",
+                    custom: { id: fileId },
+                },
+            ],
+        })
+    );
+}
+
+/**
+ * Ingest one Drive file into the Bedrock custom data source.
+ * 
+ * @param fileId The Drive file id of the file
+ * @param metaData The Drive metadata the file
+ */
+async function ingestFile(fileId, metaData) {
+    const fileName = metaData.name;
     const { body, contentType } = await drive.getContent(fileId, metaData.mimeType);
     const path = await drive.getFilePath(metaData.name, metaData.parents);
 
-    // Ingest document into knowledgebase
-    console.log("Ingesting document...");
     const document = {
         content: {
             dataSourceType: "CUSTOM",
             custom: {
-                customDocumentIdentifier: {
-                    id: fileId
-                },
+                customDocumentIdentifier: { id: fileId },
                 sourceType: "IN_LINE",
                 inlineContent: {
                     type: "BYTE",
@@ -178,14 +189,11 @@ async function syncChange(change) {
         }
     };
 
-    const result = await kbClient.send(
+    await kbClient.send(
         new IngestKnowledgeBaseDocumentsCommand({
             knowledgeBaseId: KB_ID,
             dataSourceId: KB_SOURCE_ID,
-            documents: [ document ]
+            documents: [document],
         })
     );
-
-    return "ingested";
 }
-

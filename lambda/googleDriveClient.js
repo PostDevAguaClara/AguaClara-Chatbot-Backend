@@ -60,34 +60,50 @@ class GoogleDriveClient {
     }
 
     async getChanges(pageToken) {
-        const result = await this.request("/drive/v3/changes", {
-                params: {
-                    pageToken,
-                    supportsAllDrives: true,
-                    includeItemsFromAllDrives: true,
-                    fields:
-                        "nextPageToken,newStartPageToken,\
-                        changes(fileId,removed,file(id,name,mimeType,modifiedTime,trashed))"
-                }
-            }
-        );
+        const params = {
+            pageToken,
+            supportsAllDrives: true,
+            includeItemsFromAllDrives: true,
+            fields: "nextPageToken,newStartPageToken,\
+                    changes(fileId,removed,file(id,name,mimeType,trashed))"
+        }
+        const result = await this.request("/drive/v3/changes", { params });
         result.changes ??= []; // Ensure changes is non-null and iterable
         return result;
     }
 
-    async getFiles(pageToken) {
+    /**
+     * Returns a map of file IDs to all supported files in Google Drive.
+     * 
+     * @param {Set<string>} typeWhitelist
+     * @returns {Promise<Map<string, object>>}
+     */
+    async getFiles(typeWhitelist=null) {
+        const files = new Map();
         const params = {
-            pageToken: pageToken,
-            pageSize: 1000,
-            fields: "nextPageToken,incompleteSearch,\
-                    files(id,name,mimeType,modifiedTime,webViewLink,parents,trashed)",
-            q: "trashed = false",
             supportsAllDrives: true,
             includeItemsFromAllDrives: true,
-        };
-        const result = await this.request("/drive/v3/files", { params } );
-        result.files ??= []; // Ensure changes is non-null and iterable
-        return result;
+            q: "trashed = false",
+            fields: "nextPageToken,incompleteSearch," +
+                    "files(id,name,mimeType,modifiedTime,webViewLink,parents,trashed)"
+        }
+
+        do {
+            const result = await this.request("/drive/v3/files", { params });
+            
+            if (result.incompleteSearch) {
+                throw new Error("Google Drive returned incompleteSearch=true");
+            }
+
+            for (const file of result.files ?? []) {
+                if (typeWhitelist && !typeWhitelist.has(file.mimeType)) { continue; }
+                files.set(file.id, file);
+            }
+
+            params.pageToken = result.nextPageToken;
+        } while (params.pageToken)
+
+        return files;
     }
 
 
@@ -95,7 +111,7 @@ class GoogleDriveClient {
     async getMetaData(fileId) {
         return this.request(`/drive/v3/files/${fileId}`, {
             params: {
-                fields: "name,mimeType,modifiedTime,webViewLink,parents",
+                fields: "name,mimeType,webViewLink,parents",
                 supportsAllDrives: true
             }
         });
