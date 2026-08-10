@@ -21,6 +21,26 @@ const runtimeClient = new BedrockRuntimeClient({});
 
 const MODEL_ID = "amazon.nova-lite-v1:0";
 
+function extractExcerpt(text, quote, maxLength = 512) {
+    if (!quote) { return text; }
+
+    const index = text.toLowerCase().indexOf(quote.toLowerCase());
+
+    if (index === -1) {
+        console.warn("Could not find model-selected quote in source.");
+        return text;
+    }
+
+    const start = Math.max(0, index - 128);
+    const end = Math.min(text.length, start + maxLength);
+
+    let excerpt = text.substring(start, end);
+
+    if (start > 0) { excerpt = "..." + excerpt; }
+
+    return excerpt;
+}
+
 exports.handler = async (event) => {
     const body = JSON.parse(event.body ?? "{}");
     console.log("User Input: ", JSON.stringify(body, null, 2));
@@ -111,25 +131,36 @@ exports.handler = async (event) => {
         - Your response MUST be valid JSON with exactly this format:
         {
             "answer": "The natural language answer to the user.",
-            "usedSources": [1, 3]
+            "usedSources": [
+                { 
+                    "id": 1,
+                    "quote": "A short exact quote from the source that directly supports the answer."
+                }
+            ]
         }
-        - The "usedSources" array must contain ONLY the source IDs that directly support your answer.
+        - "answer" must contain ONLY the natural-language response that should be shown to the user.
+        - "usedSources" must contain every source that is used to support your answer.
         - If no provided sources support the answer, "usedSources" must be an empty array.
-        - The "answer" field must contain ONLY the natural-language answer to the user.
-        - NEVER put source IDs, citations, citation labels, or references such as "[Sources: 1, 2, 4]" in the "answer" field.
-        - Source selection belongs exclusively in the "usedSources" array.
-        - Do not mention the existence of "usedSources" to the user.
-        - Do not mention source IDs in the natural-language answer.
+        - Each "id" must exactly match the ID of a provided <source>
+        - Each "quote" must be an exact, contiguous excerpt copied from the corresponding source.
+        - Do NOT paraphrase, summarize, or modify quotes.
+        - Each quote should be reasonably short.
+        - Prefer a quote from the most relevant section of the source rather than the beginning of the source.
+        - The "answer" and "usedSources" are seperate fields. Citation information belongs ONLY in "usedSources".
+        - NEVER put [Source: 1], [Sources: 1, 2], (Source 1), Source 1, or any other source identifier or citation notation in the answer.
+        - NEVER mention source IDs or "usedSources" in the answer.
+        - Do not add any text before or after the JSON object.
 
         Source citation rules:
-        - A source may be included in "usedSources" ONLY if information from that source directly supports a factual claim made in the answer.
+        - Include a source in "usedSources" ONLY when it supports a factual claim or is necessary for the answer.
         - Do NOT cite a source merely because it discusses the same general topic.
-        - Do NOT cite a source merely because it contains words or concepts related to the question.
         - Do NOT cite a source because it was useful for understanding the question.
         - Do NOT cite a source if the answer could remain unchanged without information from that source.
+        - Do NOT cite a source merely because it contains a related words or concept but does not support the answer.
         - If multiple sources are necessary, cite each source only for the claims it actually supports.
+        - If multiple sources directly support different parts of the answer, cite each relevant source.
         - When the retrieved sources do not directly support a claim, do not cite them for that claim.
-        - Never infer that a source supports an answer simply because its subject matter is related.
+        - If the provided documentation does not directly support a claim, do not pretend that it does.
     `
 
     // Convert conversation into Bedrock Converse messages format
@@ -185,16 +216,15 @@ exports.handler = async (event) => {
         output: modelResponse.answer,
         citations: []
     };
-    for (const sourceId of modelResponse.usedSources) {
-        const reference = retrieved.retrievalResults[sourceId - 1]
-        if (reference) {
-            response.citations.push({
-                quote: reference.content?.text ?? "",
-                name: reference.metadata?.["file-name"],
-                url: reference.metadata?.["web-view-link"],
-                path: reference.metadata?.["path"],
-            });
-        }
+    for (const source of modelResponse.usedSources) {
+        const reference = retrieved.retrievalResults[source.id - 1]
+        if (!reference) { continue; }
+        response.citations.push({
+            quote: extractExcerpt(reference.content?.text ?? "", source.quote),
+            name: reference.metadata?.["file-name"],
+            url: reference.metadata?.["web-view-link"],
+            path: reference.metadata?.["path"],
+        });
     }
     console.log("Output: ", response);
 
