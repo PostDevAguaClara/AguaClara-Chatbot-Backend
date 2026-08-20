@@ -8,7 +8,6 @@
  * 
  */
 const { GoogleAuth } = require("google-auth-library");
-const { SecretsManagerClient, GetSecretValueCommand } = require("@aws-sdk/client-secrets-manager");
 const { 
     SSMClient, 
     GetParameterCommand, 
@@ -21,14 +20,12 @@ const GOOGLE_EXPORTS_TYPES = {
     "application/vnd.google-apps.spreadsheet":  "text/csv"
 };
 
-const DRIVE_KEY                 = "chatbot-drive-sync-key";
+const GOOGLE_SERVICE_KEY        = "/chatbot/google/serviceKey";
 const SYNC_TOKEN_PARAMETER      = "/chatbot/drive/lastSyncToken";
 const WATCH_CHANNEL_PARAMETER   = "/chatbot/drive/watchChannel";
 
 class GoogleDriveClient {
-    constructor(secretId = "chatbot-drive-sync-key") {
-        this.secretId = secretId;
-        this.secrets = new SecretsManagerClient({});
+    constructor() {
         this.ssm = new SSMClient({});
         this.authClient = null;
     }
@@ -36,12 +33,14 @@ class GoogleDriveClient {
     async init() {
         if (this.authClient) return;
 
-        const secret = await this.secrets.send(
-            new GetSecretValueCommand({
-                SecretId: this.secretId,
+        const serviceKeyParameter = await this.ssm.send(
+            new GetParameterCommand({
+                Name: GOOGLE_SERVICE_KEY,
+                WithDecryption: true
             })
         );
-        const credentials = JSON.parse(secret.SecretString);
+
+        const credentials = JSON.parse(serviceKeyParameter.Parameter.Value);
         
         const auth = new GoogleAuth({
             credentials,

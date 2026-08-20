@@ -3,7 +3,6 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as iam from 'aws-cdk-lib/aws-iam';
 
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
-import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import * as sqs from "aws-cdk-lib/aws-sqs";
 import * as lambdaEventSources from "aws-cdk-lib/aws-lambda-event-sources";
 
@@ -56,7 +55,7 @@ export class AguaclaraChatbotStack extends cdk.Stack {
           "ssm:PutParameter"
         ],
         resources: [
-          `arn:aws:ssm:${this.region}:${this.account}:parameter/chatbot/drive/*`
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/chatbot/*`
         ]
       })
     );
@@ -126,7 +125,7 @@ export class AguaclaraChatbotStack extends cdk.Stack {
           "ssm:PutParameter",
         ],
         resources: [
-          `arn:aws:ssm:${this.region}:${this.account}:parameter/chatbot/drive/*`,
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/chatbot/*`,
         ],
       })
     );
@@ -149,14 +148,6 @@ export class AguaclaraChatbotStack extends cdk.Stack {
         ]
       })
     );
-
-    // == Secrets    
-    const googleSecret = secretsmanager.Secret.fromSecretNameV2(this,
-      'GoogleDriveSecret',
-      'chatbot-drive-sync-key'
-    );
-    googleSecret.grantRead(syncLambda);
-    googleSecret.grantRead(fullSyncLambda);
 
     // API Gateways
     const syncApi = new apigateway.LambdaRestApi(this, 'DriveSyncApi', {
@@ -214,7 +205,6 @@ export class AguaclaraChatbotStack extends cdk.Stack {
       "WATCH_LAMBDA_ARN", 
       `arn:aws:lambda:${this.region}:${this.account}:function:${watchLambdaName}`
     );
-    googleSecret.grantRead(watchLambda);
     watchLambda.addToRolePolicy(
       new iam.PolicyStatement({
         actions: [
@@ -222,7 +212,7 @@ export class AguaclaraChatbotStack extends cdk.Stack {
           "ssm:PutParameter"
         ],
         resources: [
-          `arn:aws:ssm:${this.region}:${this.account}:parameter/chatbot/drive/*`
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/chatbot/*`
         ]
       })
     );

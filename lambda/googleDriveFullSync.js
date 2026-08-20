@@ -19,7 +19,7 @@ const {
 
 const GoogleDriveClient = require("./googleDriveClient");
 
-const drive = new GoogleDriveClient("chatbot-drive-sync-key");
+const drive = new GoogleDriveClient();
 const kbClient = new BedrockAgentClient({});
 
 const KB_ID = process.env.KNOWLEDGEBASE_ID;

@@ -2,7 +2,7 @@
 const GoogleDriveClient = require("./googleDriveClient");
 const { SchedulerClient, CreateScheduleCommand } = require("@aws-sdk/client-scheduler");
 
-const drive = new GoogleDriveClient("chatbot-drive-sync-key");
+const drive = new GoogleDriveClient();
 const scheduler = new SchedulerClient({});
 const RENEWAL_MARGIN_MS = 1000 * 60 * 5 // 5 minutes
 

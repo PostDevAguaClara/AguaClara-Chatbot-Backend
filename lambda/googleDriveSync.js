@@ -1,14 +1,13 @@
 /**
  * googleDriveSync.js
  * 
+ * This is the Lambda function responsible for syncing incremental changes between the Google Drive
+ * and the Knowledge Base.
  * 
+ * It detects changes 
  * 
  */ 
 const { GoogleAuth } = require("google-auth-library");
-const { 
-    SecretsManagerClient, 
-    GetSecretValueCommand 
-} = require("@aws-sdk/client-secrets-manager");
 const { 
     SSMClient, 
     GetParameterCommand, 
@@ -27,7 +26,6 @@ const KB_ID = process.env.KNOWLEDGEBASE_ID;
 const KB_SOURCE_ID = process.env.KNOWLEDGEBASE_SOURCE_ID;
 
 const ssm = new SSMClient({});
-const secrets = new SecretsManagerClient({});
 const kbClient = new BedrockAgentClient({});
 
 const DOWNLOADABLE_MIME_TYPES = new Set([
@@ -44,7 +42,7 @@ const DOWNLOADABLE_MIME_TYPES = new Set([
 ]);
 
 const GoogleDriveClient = require("./googleDriveClient");
-const drive = new GoogleDriveClient("chatbot-drive-sync-key");
+const drive = new GoogleDriveClient();
 
 
 exports.handler = async (event) => {
