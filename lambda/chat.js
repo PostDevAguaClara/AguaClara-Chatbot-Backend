@@ -85,7 +85,7 @@ exports.handler = async (event) => {
         If the user's message is a request for information that may be answered using documentation:
         - Use the documentation as your primary source.
         - Use the documentation to answer the user's question whenever it provides enough information, even if it does not use the exact same wording.
-        - When the documentation has related information, answer the question to the best of your ability.
+        - When the documentation has related information, use it to answer the question to the best of your ability.
         - You may synthesize information from multiple sources when they collectively answer the question.
         - If the retrieved sources provide enough information to reasonably answer the user's question, answer using that information.
         - If you answer using information from the documentation, you must cite as least one document.

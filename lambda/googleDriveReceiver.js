@@ -25,7 +25,8 @@ exports.handler = async (event) => {
     await sqs.send(
         new SendMessageCommand({
             QueueUrl: process.env.QUEUE_URL,
-            MessageBody: "drive-change"
+            MessageBody: "drive-change",
+            MessageGroupId: "drive-sync",
         })
     );
 

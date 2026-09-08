@@ -18,6 +18,7 @@ export class AguaclaraChatbotStack extends cdk.Stack {
 
     // == SQS Queues
     const driveSyncQueue = new sqs.Queue(this, "DriveSyncQueue", {
+      fifo: true,
       visibilityTimeout: cdk.Duration.minutes(15),
     });
 
